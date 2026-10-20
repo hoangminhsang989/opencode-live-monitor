@@ -969,6 +969,125 @@ def dismiss_question_in_opencode(session_title: str, session_id: str = None) -> 
         except Exception as e:
             return False, str(e)
 
+def create_new_session_in_opencode(title: str = "", directory: str = "") -> tuple:
+    """Tạo một phiên làm việc mới trong OpenCode (ưu tiên REST API ngầm)."""
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            ok, data = default_client.create_session(title=title, directory=directory)
+            if ok:
+                return True, data
+    except Exception as e:
+        print(f"[create_new_session_in_opencode] REST API error: {e}")
+
+    with _ui_action_lock:
+        hwnd = win32gui.FindWindow(None, "OpenCode")
+        if not hwnd:
+            return False, "Không tìm thấy cửa sổ OpenCode đang chạy."
+        prev_hwnd = win32gui.GetForegroundWindow()
+        try:
+            force_foreground_window(hwnd)
+            time.sleep(0.1)
+            # Nhấn Ctrl+T để mở tab phiên mới trong OpenCode
+            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+            win32api.keybd_event(ord('T'), 0, 0, 0)
+            time.sleep(0.05)
+            win32api.keybd_event(ord('T'), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.3)
+            if prev_hwnd and prev_hwnd != hwnd and win32gui.IsWindow(prev_hwnd):
+                force_foreground_window(prev_hwnd)
+            return True, "Đã gửi phím tạo phiên mới (Ctrl+T) thành công."
+        except Exception as e:
+            if prev_hwnd and prev_hwnd != hwnd and win32gui.IsWindow(prev_hwnd):
+                try:
+                    force_foreground_window(prev_hwnd)
+                except Exception:
+                    pass
+            return False, str(e)
+
+def close_session_in_opencode(session_id: str = None, session_title: str = "") -> tuple:
+    """Đóng / xóa phiên OpenCode (ưu tiên REST API ngầm)."""
+    if not session_id and session_title:
+        try:
+            for s in poll_all_sessions():
+                s_t = s.get('title', '')
+                if s_t and (session_title.lower() in s_t.lower() or s_t.lower() in session_title.lower()):
+                    session_id = s.get('sessionId')
+                    break
+        except Exception:
+            pass
+
+    if session_id:
+        try:
+            from opencode_client import default_client
+            if default_client.connect():
+                ok, msg = default_client.delete_session(session_id)
+                if ok:
+                    return True, "Đã đóng phiên làm việc thành công qua REST API."
+        except Exception as e:
+            print(f"[close_session_in_opencode] REST API error: {e}")
+
+    with _ui_action_lock:
+        hwnd = win32gui.FindWindow(None, "OpenCode")
+        if not hwnd:
+            return False, "Không tìm thấy cửa sổ OpenCode đang chạy."
+        prev_hwnd = win32gui.GetForegroundWindow()
+        try:
+            force_foreground_window(hwnd)
+            time.sleep(0.1)
+            app = Application(backend="uia").connect(handle=hwnd, timeout=2.0)
+            win = app.window(handle=hwnd)
+            # Tìm nút đóng tab
+            target_close = None
+            for b in win.descendants(control_type="Button"):
+                txt = b.window_text().strip().lower()
+                if "đóng tab" in txt or "close tab" in txt:
+                    target_close = b
+                    break
+            if target_close:
+                try:
+                    target_close.invoke()
+                except Exception:
+                    target_close.click_input()
+                time.sleep(0.2)
+                if prev_hwnd and prev_hwnd != hwnd and win32gui.IsWindow(prev_hwnd):
+                    force_foreground_window(prev_hwnd)
+                return True, "Đã đóng tab thành công qua giao diện."
+            if prev_hwnd and prev_hwnd != hwnd and win32gui.IsWindow(prev_hwnd):
+                force_foreground_window(prev_hwnd)
+            return False, "Không tìm thấy nút đóng tab trên giao diện."
+        except Exception as e:
+            if prev_hwnd and prev_hwnd != hwnd and win32gui.IsWindow(prev_hwnd):
+                try:
+                    force_foreground_window(prev_hwnd)
+                except Exception:
+                    pass
+            return False, str(e)
+
+def switch_session_model_in_opencode(session_id: str, provider_id: str, model_id: str, variant: str = "default") -> tuple:
+    """Đổi Model AI cho một phiên làm việc riêng biệt qua REST API."""
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            ok, msg = default_client.switch_session_model(session_id, provider_id, model_id, variant)
+            return ok, msg
+        return False, "Không thể kết nối đến OpenCode REST API để đổi model."
+    except Exception as e:
+        return False, f"Lỗi đổi model: {e}"
+
+def get_session_model_in_opencode(session_id: str) -> Optional[dict]:
+    """Lấy thông tin model hiện tại của một phiên."""
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            info = default_client.get_session_info(session_id)
+            if info:
+                return info.get("model")
+    except Exception:
+        pass
+    return None
+
 if __name__ == '__main__':
     sessions = poll_all_sessions()
     print(f"Found {len(sessions)} open sessions:")

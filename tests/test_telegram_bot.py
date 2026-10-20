@@ -230,3 +230,53 @@ def test_prompt_send_in_progress_blocks_duplicate(monkeypatch):
     bot.handle_send_prompt_action("123", "sid_1")
 
     assert any("đang trong quá trình gửi" in t for t in sent)
+
+def test_telegram_bot_new_session_menu(monkeypatch):
+    cfg = {"telegram_bot_token": "t", "telegram_chat_id": "123", "telegram_enabled": True}
+    bot = OpenCodeTelegramBot(lambda: cfg)
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda chat_id, text, markup=None: sent.append((text, markup)))
+
+    bot.handle_new_session_menu("123")
+    assert len(sent) == 1
+    assert "MỞ PHIÊN LÀM VIỆC MỚI" in sent[0][0]
+    markup = sent[0][1]
+    assert "inline_keyboard" in markup
+    cb_data = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+    assert any("create_session_proj:" in c for c in cb_data)
+
+def test_telegram_bot_create_and_close_session(monkeypatch):
+    cfg = {"telegram_bot_token": "t", "telegram_chat_id": "123", "telegram_enabled": True}
+    bot = OpenCodeTelegramBot(lambda: cfg)
+
+    monkeypatch.setattr("telegram_bot.create_new_session_in_opencode", lambda title, directory: (True, {"id": "ses_new_99", "title": title}))
+    monkeypatch.setattr("telegram_bot.close_session_in_opencode", lambda session_id, session_title: (True, "Đã đóng"))
+
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda chat_id, text, markup=None: sent.append((text, markup)))
+    monkeypatch.setattr(bot, "edit_message", lambda chat_id, msg_id, text, markup=None: sent.append((text, markup)))
+
+    # Tạo phiên
+    bot.handle_create_session("123", "E:\\auto-3d")
+    assert any("ĐÃ MỞ PHIÊN MỚI THÀNH CÔNG" in s[0] for s in sent)
+
+    # Đóng phiên
+    sent.clear()
+    bot.handle_do_close_session("123", 55, "ses_new_99")
+    assert any("ĐÃ ĐÓNG PHIÊN THÀNH CÔNG" in s[0] for s in sent)
+
+def test_telegram_bot_model_menu_and_set(monkeypatch):
+    cfg = {"telegram_bot_token": "t", "telegram_chat_id": "123", "telegram_enabled": True}
+    bot = OpenCodeTelegramBot(lambda: cfg)
+
+    monkeypatch.setattr("telegram_bot.get_session_model_in_opencode", lambda sid: {"id": "ag/gemini-3.8-flash-high", "providerID": "9router"})
+    monkeypatch.setattr("telegram_bot.switch_session_model_in_opencode", lambda sid, pid, mid: (True, "OK"))
+
+    sent = []
+    monkeypatch.setattr(bot, "edit_message", lambda chat_id, msg_id, text, markup=None: sent.append((text, markup)))
+
+    bot.handle_choose_model_menu("123", 55, "ses_1")
+    assert any("CÀI ĐẶT MODEL AI CHO PHIÊN" in s[0] for s in sent)
+    markup = sent[0][1]
+    cb_data = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+    assert any("set_model:ses_1:9router:ag/claude-sonnet-4-6" in c for c in cb_data)

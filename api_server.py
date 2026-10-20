@@ -34,6 +34,15 @@ class DismissQuestionRequest(BaseModel):
 class AbortSessionRequest(BaseModel):
     session: str
 
+class CreateSessionRequest(BaseModel):
+    title: Optional[str] = ""
+    directory: Optional[str] = ""
+
+class SwitchModelRequest(BaseModel):
+    provider_id: str
+    model_id: str
+    variant: Optional[str] = "default"
+
 @app.get("/health")
 def get_health():
     api_connected = default_client.is_connected()
@@ -163,6 +172,40 @@ def abort_session(req: AbortSessionRequest):
         raise HTTPException(status_code=404, detail=f"Không tìm thấy phiên '{req.session}'")
 
     ok, msg = default_client.abort_session(session_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail=msg)
+    return {"success": True, "message": msg}
+
+@app.post("/api/sessions/create")
+def create_session_endpoint(req: CreateSessionRequest):
+    """Mở một phiên OpenCode mới."""
+    ok, res = core_monitor.create_new_session_in_opencode(title=req.title or "", directory=req.directory or "")
+    if not ok:
+        raise HTTPException(status_code=500, detail=str(res))
+    return {"success": True, "session": res}
+
+@app.delete("/api/sessions/{session_id}")
+def close_session_endpoint(session_id: str):
+    """Đóng / xóa phiên OpenCode."""
+    ok, msg = core_monitor.close_session_in_opencode(session_id=session_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail=msg)
+    return {"success": True, "message": msg}
+
+@app.get("/api/models")
+def get_available_models_endpoint():
+    """Lấy danh sách các model đang kết nối và khả dụng."""
+    return default_client.get_available_models()
+
+@app.post("/api/sessions/{session_id}/model")
+def switch_session_model_endpoint(session_id: str, req: SwitchModelRequest):
+    """Đổi Model AI cho một phiên làm việc riêng biệt."""
+    ok, msg = core_monitor.switch_session_model_in_opencode(
+        session_id=session_id,
+        provider_id=req.provider_id,
+        model_id=req.model_id,
+        variant=req.variant or "default"
+    )
     if not ok:
         raise HTTPException(status_code=500, detail=msg)
     return {"success": True, "message": msg}

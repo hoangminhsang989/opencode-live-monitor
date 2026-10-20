@@ -306,5 +306,112 @@ class OpenCodeAPIClient:
             pass
         return []
 
+    def create_session(self, title: str = "", directory: str = "") -> Tuple[bool, Any]:
+        """Tạo một phiên OpenCode mới (ngầm)."""
+        if not self.is_connected():
+            return False, "Không thể kết nối đến OpenCode REST API."
+        try:
+            url = f"{self._url}/session"
+            payload = {}
+            if title:
+                payload["title"] = title
+            if directory:
+                payload["directory"] = directory
+            r = requests.post(url, headers=self._auth_headers, json=payload, timeout=5.0)
+            if r.status_code in (200, 201):
+                return True, r.json()
+            return False, f"Lỗi tạo phiên {r.status_code}: {r.text}"
+        except Exception as e:
+            return False, f"Lỗi gọi API tạo phiên: {e}"
+
+    def delete_session(self, session_id: str) -> Tuple[bool, str]:
+        """Đóng / xóa phiên OpenCode theo ID."""
+        if not self.is_connected():
+            return False, "Không thể kết nối đến OpenCode REST API."
+        try:
+            url = f"{self._url}/session/{session_id}"
+            r = requests.delete(url, headers=self._auth_headers, timeout=5.0)
+            if r.status_code in (200, 204):
+                return True, "Đã đóng phiên thành công."
+            return False, f"Lỗi đóng phiên {r.status_code}: {r.text}"
+        except Exception as e:
+            return False, f"Lỗi gọi API đóng phiên: {e}"
+
+    def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy thông tin chi tiết của một phiên (bao gồm model hiện tại, thư mục...)."""
+        if not self.is_connected():
+            return None
+        try:
+            url = f"{self._url}/session/{session_id}"
+            r = requests.get(url, headers=self._auth_headers, timeout=3.0)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return None
+
+    def switch_session_model(self, session_id: str, provider_id: str, model_id: str, variant: str = "default") -> Tuple[bool, str]:
+        """Chuyển đổi model AI cho một phiên làm việc riêng biệt."""
+        if not self.is_connected():
+            return False, "Không thể kết nối đến OpenCode REST API."
+        try:
+            # OpenCode route: POST /api/session/:sessionID/model
+            url = f"{self._url}/api/session/{session_id}/model"
+            payload = {
+                "model": {
+                    "providerID": provider_id,
+                    "id": model_id,
+                    "variant": variant
+                }
+            }
+            r = requests.post(url, headers=self._auth_headers, json=payload, timeout=5.0)
+            if r.status_code in (200, 204):
+                return True, f"Đã chuyển model phiên sang: {model_id} ({provider_id})"
+            # Fallback nếu endpoint không có tiền tố /api
+            url_fallback = f"{self._url}/session/{session_id}/model"
+            r2 = requests.post(url_fallback, headers=self._auth_headers, json=payload, timeout=5.0)
+            if r2.status_code in (200, 204):
+                return True, f"Đã chuyển model phiên sang: {model_id} ({provider_id})"
+            return False, f"Lỗi đổi model {r.status_code}: {r.text}"
+        except Exception as e:
+            return False, f"Lỗi gọi API đổi model: {e}"
+
+    def get_available_models(self) -> List[Dict[str, Any]]:
+        """Lấy danh sách các model đang kết nối và khả dụng từ tất cả các provider."""
+        if not self.is_connected():
+            return []
+        try:
+            url = f"{self._url}/provider"
+            r = requests.get(url, headers=self._auth_headers, timeout=4.0)
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            connected_pids = set(data.get("connected", []))
+            all_providers = {p.get("id"): p for p in data.get("all", [])}
+            
+            result = []
+            # Ưu tiên các provider kết nối của người dùng: 9router, jerouter, darkapi, opencode
+            priority_order = ["9router", "jerouter", "darkapi", "opencode"]
+            sorted_pids = [pid for pid in priority_order if pid in connected_pids] + [pid for pid in connected_pids if pid not in priority_order]
+            
+            for pid in sorted_pids:
+                p = all_providers.get(pid)
+                if not p:
+                    continue
+                p_name = p.get("name", pid)
+                models = p.get("models", {})
+                for mid, minfo in models.items():
+                    m_name = minfo.get("name", mid)
+                    result.append({
+                        "providerID": pid,
+                        "providerName": p_name,
+                        "modelID": mid,
+                        "modelName": m_name,
+                        "label": f"{m_name} ({p_name})"
+                    })
+            return result
+        except Exception:
+            return []
+
 # Singleton instance dùng chung
 default_client = OpenCodeAPIClient()

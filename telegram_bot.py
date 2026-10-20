@@ -11,7 +11,8 @@ from typing import Dict, Any, List, Optional
 from core_monitor import (
     poll_all_sessions, get_latest_assistant_response, send_prompt_to_opencode_session,
     get_active_question_for_session, approve_permission_in_opencode, select_question_option_in_opencode,
-    dismiss_question_in_opencode
+    dismiss_question_in_opencode, create_new_session_in_opencode, close_session_in_opencode,
+    switch_session_model_in_opencode, get_session_model_in_opencode
 )
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -104,7 +105,7 @@ class OpenCodeTelegramBot:
         return {
             "keyboard": [
                 [{"text": "📊 Bảng trạng thái"}, {"text": "📸 Chụp màn hình"}],
-                [{"text": "❓ Trợ giúp"}]
+                [{"text": "➕ Mở phiên mới"}, {"text": "❓ Trợ giúp"}]
             ],
             "resize_keyboard": True,
             "persistent": True
@@ -132,6 +133,7 @@ class OpenCodeTelegramBot:
         """Đăng ký menu lệnh chuẩn (nút Menu góc trái khung chat Telegram)."""
         commands = [
             {"command": "status", "description": "Xem bảng trạng thái các phiên OpenCode"},
+            {"command": "new", "description": "Tạo / mở một phiên làm việc mới"},
             {"command": "screen", "description": "Chụp ảnh màn hình máy tính gửi về điện thoại"},
             {"command": "help", "description": "Xem hướng dẫn và các phím tắt"}
         ]
@@ -313,7 +315,8 @@ class OpenCodeTelegramBot:
             toggle_refresh_btn
         ])
         inline_keyboard.append([
-            {"text": "📸 Chụp màn hình ngay", "callback_data": "cmd_screen"}
+            {"text": "➕ Mở phiên mới", "callback_data": "menu_new_session"},
+            {"text": "📸 Chụp màn hình", "callback_data": "cmd_screen"}
         ])
 
         return "\n".join(lines), {"inline_keyboard": inline_keyboard}
@@ -362,12 +365,20 @@ class OpenCodeTelegramBot:
         else:
             ac_state_text = f"⏸ TẮT (mức đặt: {ac_max} lệnh)"
 
+        model_info = get_session_model_in_opencode(session_id)
+        model_display = "Mặc định hệ thống"
+        if model_info:
+            mid = model_info.get("id", "")
+            pid = model_info.get("providerID", "")
+            model_display = f"{mid} ({pid})" if pid else mid
+
         text = (
             f"📌 <b>CHI TIẾT PHIÊN LÀM VIỆC</b>\n\n"
             f"🏷️ <b>Tiêu đề:</b> <b>{title}</b>\n"
             f"📁 <b>Thư mục:</b> <code>{directory}</code>\n"
             f"📊 <b>Trạng thái:</b> {icon} <b>{label}</b>\n"
             f"ℹ️ <b>Chi tiết:</b> <i>{detail}</i>\n"
+            f"🧠 <b>Model AI:</b> <code>{model_display}</code>\n"
             f"⚡ <b>Tự động tiếp tục:</b> {ac_state_text}\n"
             f"─────────────────────\n"
             f"👇 <i>Chọn thao tác hoặc chỉnh số lần tự gửi bên dưới:</i>"
@@ -379,6 +390,10 @@ class OpenCodeTelegramBot:
             [{"text": "📜 Xem câu trả lời gần nhất", "callback_data": f"read_ans:{session_id}"}],
             [{"text": "✍️ Soạn phản hồi / Gửi ảnh", "callback_data": f"chat_mode:{session_id}"}],
             [{"text": "💬 Gửi 'tiếp tục' ngay", "callback_data": f"send_prompt:{session_id}"}],
+            [
+                {"text": "🧠 Đổi Model AI", "callback_data": f"choose_model:{session_id}"},
+                {"text": "❌ Đóng phiên này", "callback_data": f"confirm_close_session:{session_id}"}
+            ],
             [{"text": ac_btn_text, "callback_data": ac_callback}],
             [
                 {"text": "➖ 1", "callback_data": f"adjust_ac_count:{session_id}:-1"},
@@ -551,6 +566,139 @@ class OpenCodeTelegramBot:
         else:
             self.send_message(chat_id, text, markup)
 
+    def handle_new_session_menu(self, chat_id: str, message_id: int = None):
+        """Hiển thị menu tạo phiên làm việc mới với danh sách thư mục dự án 1 chạm."""
+        text = (
+            "➕ <b>MỞ PHIÊN LÀM VIỆC MỚI</b>\n\n"
+            "👉 Hãy chọn một <b>thư mục dự án</b> bên dưới để OpenCode mở phiên làm việc ngay:\n\n"
+            "<i>(Phiên sẽ được tạo ngầm và tự động xuất hiện trên bảng trạng thái)</i>"
+        )
+        buttons = [
+            [{"text": "📐 E:\\auto-3d (CAD -> 3D)", "callback_data": "create_session_proj:E:\\auto-3d"}],
+            [{"text": "📱 E:\\QR (HMS-QR Mobile Web)", "callback_data": "create_session_proj:E:\\QR"}],
+            [{"text": "⚙️ D:\\HMS-CAM-W (WorkNC Clone)", "callback_data": "create_session_proj:D:\\HMS-CAM-W"}],
+            [{"text": "🎮 D:\\GAME\\HF (CFVN Replica)", "callback_data": "create_session_proj:D:\\GAME\\HF"}],
+            [{"text": "🤖 E:\\giam sat ai (Live Monitor)", "callback_data": "create_session_proj:E:\\giam sat ai"}],
+            [{"text": "📁 Thư mục mặc định (Users)", "callback_data": "create_session_proj:default"}],
+            [{"text": "🔙 Quay lại bảng trạng thái", "callback_data": "back_to_status"}]
+        ]
+        markup = {"inline_keyboard": buttons}
+        if message_id:
+            self._pause_dashboard_auto_refresh()
+            self.edit_message(chat_id, message_id, text, markup)
+        else:
+            self.send_message(chat_id, text, markup)
+
+    def handle_create_session(self, chat_id: str, proj: str, message_id: int = None):
+        target_dir = "" if proj == "default" else proj
+        folder_name = os.path.basename(target_dir.rstrip("\\/")) if target_dir else "Phiên mới"
+        title = f"{folder_name}"
+        
+        ok, res = create_new_session_in_opencode(title=title, directory=target_dir)
+        if ok:
+            sid = res.get("id") if isinstance(res, dict) else ""
+            msg = (
+                f"✅ <b>ĐÃ MỞ PHIÊN MỚI THÀNH CÔNG!</b>\n\n"
+                f"📌 <b>Tiêu đề:</b> <b>{title}</b>\n"
+                f"📁 <b>Thư mục:</b> <code>{target_dir or 'Mặc định'}</code>\n"
+                f"🆔 <b>Session ID:</b> <code>{sid}</code>\n\n"
+                f"Phiên đã xuất hiện trên OpenCode và bảng trạng thái! 🟢"
+            )
+            buttons = []
+            if sid:
+                buttons.append([{"text": "💬 Gửi lệnh đầu tiên", "callback_data": f"chat_mode:{sid}"}])
+                buttons.append([{"text": "🧠 Cài đặt Model", "callback_data": f"choose_model:{sid}"}])
+            buttons.append([{"text": "📊 Xem bảng trạng thái", "callback_data": "back_to_status"}])
+            markup = {"inline_keyboard": buttons}
+            if message_id:
+                self.edit_message(chat_id, message_id, msg, markup)
+            else:
+                self.send_message(chat_id, msg, markup)
+        else:
+            err_msg = f"❌ <b>Không thể mở phiên mới:</b>\n<i>{res}</i>"
+            if message_id:
+                self.edit_message(chat_id, message_id, err_msg, {"inline_keyboard": [[{"text": "🔙 Quay lại", "callback_data": "menu_new_session"}]]})
+            else:
+                self.send_message(chat_id, err_msg)
+
+    def handle_confirm_close_session(self, chat_id: str, message_id: int, session_id: str):
+        title = self.get_title_for_session(session_id)
+        text = (
+            f"⚠️ <b>XÁC NHẬN ĐÓNG PHIÊN</b>\n\n"
+            f"📌 Phiên: <b>{title}</b>\n"
+            f"🆔 ID: <code>{session_id}</code>\n\n"
+            f"Bạn có chắc chắn muốn đóng phiên làm việc này không?\n"
+            f"<i>(Phiên sẽ được gỡ khỏi OpenCode và bảng trạng thái)</i>"
+        )
+        buttons = [
+            [{"text": "🗑️ Xác nhận đóng ngay", "callback_data": f"do_close_session:{session_id}"}],
+            [{"text": "🔙 Hủy / Quay lại", "callback_data": f"session_detail:{session_id}"}]
+        ]
+        self._pause_dashboard_auto_refresh()
+        self.edit_message(chat_id, message_id, text, {"inline_keyboard": buttons})
+
+    def handle_do_close_session(self, chat_id: str, message_id: int, session_id: str):
+        title = self.get_title_for_session(session_id)
+        ok, res = close_session_in_opencode(session_id=session_id, session_title=title)
+        if ok:
+            # Dọn dẹp trạng thái bộ nhớ bot của phiên này
+            self.auto_continue_sent.pop(session_id, None)
+            self.auto_continue_in_progress.discard(session_id)
+            self.prompt_send_in_progress.discard(session_id)
+            self.session_states.pop(session_id, None)
+
+            text = f"✅ <b>ĐÃ ĐÓNG PHIÊN THÀNH CÔNG!</b>\n\n📌 Đã đóng: <b>{title}</b>"
+            markup = {"inline_keyboard": [[{"text": "📊 Xem bảng trạng thái", "callback_data": "back_to_status"}]]}
+            self.edit_message(chat_id, message_id, text, markup)
+        else:
+            text = f"❌ <b>Không thể đóng phiên {title}:</b>\n<i>{res}</i>"
+            markup = {"inline_keyboard": [[{"text": "🔙 Quay lại", "callback_data": f"session_detail:{session_id}"}]]}
+            self.edit_message(chat_id, message_id, text, markup)
+
+    def handle_choose_model_menu(self, chat_id: str, message_id: int, session_id: str):
+        title = self.get_title_for_session(session_id)
+        curr_model = get_session_model_in_opencode(session_id)
+        curr_display = "Mặc định hệ thống"
+        if curr_model:
+            mid = curr_model.get("id", "")
+            pid = curr_model.get("providerID", "")
+            curr_display = f"{mid} ({pid})" if pid else mid
+
+        text = (
+            f"🧠 <b>CÀI ĐẶT MODEL AI CHO PHIÊN:</b>\n"
+            f"📌 <b>{title}</b>\n\n"
+            f"⚙️ <b>Model hiện tại:</b> <code>{curr_display}</code>\n\n"
+            f"👉 <i>Chọn một Model bên dưới để gán riêng cho phiên này:</i>"
+        )
+
+        models_presets = [
+            ("⚡ Gemini 3.8 Flash High", "9router", "ag/gemini-3.8-flash-high"),
+            ("🚀 Claude 4.6 Sonnet", "9router", "ag/claude-sonnet-4-6"),
+            ("🧠 Claude 4.6 Opus Thinking", "9router", "ag/claude-opus-4-6-thinking"),
+            ("🌙 GPT-6 Luna (1M Context)", "9router", "cx/gpt-6-luna[1m]"),
+            ("💎 Step-5 Unrestricted", "jerouter", "step-5-unrestricted"),
+            ("⚡ DeepSeek Unrestricted", "jerouter", "deepseek-unrestricted"),
+            ("🌟 Kimi-K3", "darkapi", "kimi-k3"),
+        ]
+
+        buttons = []
+        for label, pid, mid in models_presets:
+            is_active = (curr_model and curr_model.get("providerID") == pid and curr_model.get("id") == mid)
+            mark = " ✅" if is_active else ""
+            buttons.append([{"text": f"{label}{mark}", "callback_data": f"set_model:{session_id}:{pid}:{mid}"}])
+
+        buttons.append([{"text": "🔙 Quay lại chi tiết phiên", "callback_data": f"session_detail:{session_id}"}])
+        self._pause_dashboard_auto_refresh()
+        self.edit_message(chat_id, message_id, text, {"inline_keyboard": buttons})
+
+    def handle_set_session_model(self, chat_id: str, message_id: int, session_id: str, provider_id: str, model_id: str):
+        title = self.get_title_for_session(session_id)
+        ok, res = switch_session_model_in_opencode(session_id, provider_id, model_id)
+        if ok:
+            self.handle_choose_model_menu(chat_id, message_id, session_id)
+        else:
+            self.send_message(chat_id, f"❌ Lỗi khi đổi model cho phiên {title}: {res}")
+
     def deliver_content_to_session(self, chat_id: str, session_title: str, prompt_text: str = "", image_path: str = None, session_id: str = None):
         if session_id:
             if session_id in self.prompt_send_in_progress or session_id in self.auto_continue_in_progress:
@@ -695,6 +843,9 @@ class OpenCodeTelegramBot:
             "   • Bạn có thể bấm <b>[ ✍️ Soạn phản hồi / Gửi ảnh ]</b> trong từng phiên.\n"
             "   • Hoặc chỉ cần <b>gửi trực tiếp văn bản hoặc hình ảnh</b> vào bot, bot sẽ hỏi bạn muốn gửi vào phiên nào!\n\n"
             "💬 <b>Gửi lệnh 'tiếp tục' ngay</b>: Bấm nút là lệnh được gõ và gửi thẳng vào OpenCode trên máy tính.\n"
+            "➕ <b>Mở phiên mới</b>: Mở ngay tab phiên làm việc mới theo thư mục dự án 1 chạm.\n"
+            "❌ <b>Đóng phiên</b>: Đóng và gỡ bỏ tab phiên đang mở trên máy tính.\n"
+            "🧠 <b>Đổi Model AI</b>: Cài đặt model AI (Gemini, Claude, GPT, Step, DeepSeek, Kimi) riêng cho từng phiên.\n"
             "📸 <b>Chụp màn hình</b>: Chụp ảnh màn hình máy tính gửi về điện thoại ngay lập tức.\n"
             "❓ <b>Trợ giúp</b>: Hiển thị lại hướng dẫn này."
         )
@@ -777,6 +928,9 @@ class OpenCodeTelegramBot:
             if text in ("/status", "📊 Bảng trạng thái"):
                 self.waiting_ac_count_input.pop(chat_id, None)
                 self.handle_status(chat_id, auto_refresh=True)
+            elif text in ("/new", "➕ Mở phiên mới"):
+                self.waiting_ac_count_input.pop(chat_id, None)
+                self.handle_new_session_menu(chat_id)
             elif text in ("/screen", "📸 Chụp màn hình"):
                 self.handle_screenshot(chat_id)
             elif text in ("/help", "/start", "❓ Trợ giúp"):
@@ -809,6 +963,18 @@ class OpenCodeTelegramBot:
             toast = "⏳ Đang xử lý..."
             if data == "refresh_status":
                 toast = "🔄 Đang làm mới bảng trạng thái..."
+            elif data == "menu_new_session":
+                toast = "➕ Mở danh mục dự án mới..."
+            elif data.startswith("create_session_proj:"):
+                toast = "🚀 Đang tạo phiên làm việc mới..."
+            elif data.startswith("confirm_close_session:"):
+                toast = "⚠️ Xác nhận đóng phiên..."
+            elif data.startswith("do_close_session:"):
+                toast = "🗑️ Đang đóng phiên..."
+            elif data.startswith("choose_model:"):
+                toast = "🧠 Tải danh sách Model..."
+            elif data.startswith("set_model:"):
+                toast = "⚙️ Đang đổi Model cho phiên..."
             elif data == "cmd_screen":
                 toast = "📸 Đang chụp ảnh màn hình máy tính..."
             elif data.startswith("send_prompt:"):
@@ -839,6 +1005,26 @@ class OpenCodeTelegramBot:
                 if self.active_dashboard:
                     resume_refresh = self.active_dashboard.get("user_auto_refresh", True)
                 self.handle_status(chat_id, message_id=msg_id, auto_refresh=resume_refresh)
+            elif data == "menu_new_session":
+                self.handle_new_session_menu(chat_id, message_id=msg_id)
+            elif data.startswith("create_session_proj:"):
+                proj = data.split("create_session_proj:")[-1]
+                self.handle_create_session(chat_id, proj, message_id=msg_id)
+            elif data.startswith("confirm_close_session:"):
+                sid = data.split("confirm_close_session:")[-1]
+                self.handle_confirm_close_session(chat_id, msg_id, sid)
+            elif data.startswith("do_close_session:"):
+                sid = data.split("do_close_session:")[-1]
+                self.handle_do_close_session(chat_id, msg_id, sid)
+            elif data.startswith("choose_model:"):
+                sid = data.split("choose_model:")[-1]
+                self.handle_choose_model_menu(chat_id, msg_id, sid)
+            elif data.startswith("set_model:"):
+                parts = data.split(":")
+                sid = parts[1]
+                pid = parts[2]
+                mid = ":".join(parts[3:])
+                self.handle_set_session_model(chat_id, msg_id, sid, pid, mid)
             elif data == "cmd_screen":
                 self.handle_screenshot(chat_id)
             elif data == "cancel_chat_mode":
