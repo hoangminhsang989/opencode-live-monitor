@@ -218,3 +218,15 @@ def test_auto_continue_already_completed_session(monkeypatch):
     # Phải tự động kích hoạt gửi tiếp tục ngay lập tức!
     assert len(started) == 1
     assert bot.auto_continue_sent.get("sid_1") == 1
+
+def test_prompt_send_in_progress_blocks_duplicate(monkeypatch):
+    cfg = {"telegram_bot_token": "t", "telegram_chat_id": "123", "telegram_enabled": True}
+    bot = OpenCodeTelegramBot(lambda: cfg)
+
+    bot.prompt_send_in_progress.add("sid_1")
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda chat_id, text, markup=None: sent.append(text))
+
+    bot.handle_send_prompt_action("123", "sid_1")
+
+    assert any("đang trong quá trình gửi" in t for t in sent)

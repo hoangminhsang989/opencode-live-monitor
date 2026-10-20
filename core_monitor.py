@@ -452,20 +452,29 @@ def get_latest_message_id(session_id: str) -> Optional[str]:
     except Exception:
         return None
 
-def verify_message_submitted(session_id: str, before_msg_id: Optional[str], timeout_sec: float = 2.5) -> tuple:
+def verify_message_submitted(session_id: str, before_msg_id: Optional[str], timeout_sec: float = 3.0, before_time: Optional[int] = None) -> tuple:
     """Kiểm tra trong SQLite xem phiên đã thực sự nhận tin nhắn user mới hay chưa."""
     if not os.path.exists(DB_PATH):
         return False, None
+    if before_time is None:
+        before_time = int(time.time() * 1000) - 2000
     start = time.time()
     while time.time() - start < timeout_sec:
         time.sleep(0.25)
         try:
             conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
             c = conn.cursor()
-            c.execute("SELECT id, json_extract(data, '$.role') FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 1", (session_id,))
+            # Lọc tin nhắn có role = 'user' tạo sau before_time hoặc có id khác before_msg_id
+            c.execute("""
+                SELECT id, time_created FROM message 
+                WHERE session_id = ? 
+                  AND json_extract(data, '$.role') = 'user'
+                  AND time_created >= ?
+                ORDER BY time_created DESC LIMIT 1
+            """, (session_id, before_time))
             row = c.fetchone()
             conn.close()
-            if row and row[0] != before_msg_id and row[1] == 'user':
+            if row and row[0] != before_msg_id:
                 return True, row[0]
         except Exception:
             pass
@@ -490,14 +499,18 @@ def send_prompt_to_opencode_session(session_title: str, prompt_text: str = "", i
             from opencode_client import default_client
             if default_client.connect():
                 before_msg_id = get_latest_message_id(session_id)
+                before_time = int(time.time() * 1000) - 1000
                 api_ok, api_msg = default_client.send_prompt(session_id, prompt_text=prompt_text, image_path=image_path)
                 if api_ok:
-                    submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.5)
+                    submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=3.0, before_time=before_time)
                     if submitted:
-                        return True, "Gửi thành công qua REST API (hoàn toàn ngầm)."
-                    print("[send_prompt_to_opencode_session] REST API gửi được nhưng chưa xác nhận SQLite, fallback GUI...")
+                        return True, "Gửi thành công qua REST API (hoàn toàn ngầm, đã xác nhận database)."
+                    # OpenCode REST API đã tiếp nhận (HTTP 200/204). Lệnh đã nằm trong hàng đợi xử lý.
+                    # TUYỆT ĐỐI KHÔNG fallback sang GUI để tránh gửi đúp 2 lần!
+                    return True, "Gửi thành công qua REST API (đã tiếp nhận vào hàng đợi OpenCode)."
+                print(f"[send_prompt_to_opencode_session] REST API gửi thất bại ({api_msg}), fallback GUI...")
         except Exception as e:
-            print(f"[send_prompt_to_opencode_session] REST API error: {e}")
+            print(f"[send_prompt_to_opencode_session] REST API error: {e}, fallback GUI...")
 
     with _ui_action_lock:
         hwnd = win32gui.FindWindow(None, "OpenCode")
@@ -505,6 +518,7 @@ def send_prompt_to_opencode_session(session_title: str, prompt_text: str = "", i
             return False, "Không tìm thấy cửa sổ OpenCode đang chạy."
 
         before_msg_id = get_latest_message_id(session_id) if session_id else None
+        before_time = int(time.time() * 1000) - 1000
         prev_hwnd = win32gui.GetForegroundWindow()
         try:
             # Nếu OpenCode đang bị thu nhỏ (minimize), khôi phục lại
@@ -608,7 +622,7 @@ def send_prompt_to_opencode_session(session_title: str, prompt_text: str = "", i
 
             submitted = False
             if session_id:
-                submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=1.5)
+                submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.0, before_time=before_time)
 
             # Nếu Enter chưa submit được, thử bấm nút 'Gửi'
             if not submitted:
@@ -621,7 +635,7 @@ def send_prompt_to_opencode_session(session_title: str, prompt_text: str = "", i
                             send_enter_key()
                         break
                 if session_id:
-                    submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.0)
+                    submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.0, before_time=before_time)
 
             # Nếu vẫn chưa submit, thử gửi Ctrl+Enter
             if not submitted and session_id:
@@ -630,7 +644,7 @@ def send_prompt_to_opencode_session(session_title: str, prompt_text: str = "", i
                 time.sleep(0.05)
                 win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
                 win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-                submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.0)
+                submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.0, before_time=before_time)
 
             # 7. Trả lại cửa sổ làm việc cũ của người dùng một cách chắc chắn
             if prev_hwnd and prev_hwnd != hwnd and win32gui.IsWindow(prev_hwnd):

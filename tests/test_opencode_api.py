@@ -59,12 +59,27 @@ def test_core_monitor_send_prompt_prefers_rest(monkeypatch):
     mock_send = MagicMock(return_value=(True, "OK"))
     monkeypatch.setattr(default_client, "connect", lambda: True)
     monkeypatch.setattr(default_client, "send_prompt", mock_send)
-    monkeypatch.setattr(core_monitor, "verify_message_submitted", lambda sid, b_id, timeout_sec: (True, "msg_new"))
+    monkeypatch.setattr(core_monitor, "verify_message_submitted", lambda *a, **k: (True, "msg_new"))
 
     ok, msg = core_monitor.send_prompt_to_opencode_session("Test Session", "lenh tiep tuc", session_id="ses_abc")
     assert ok is True
     assert "REST API" in msg
     mock_send.assert_called_once_with("ses_abc", prompt_text="lenh tiep tuc", image_path=None)
+
+def test_core_monitor_send_prompt_rest_success_never_fallbacks_gui(monkeypatch):
+    from opencode_client import default_client
+
+    mock_send = MagicMock(return_value=(True, "OK"))
+    monkeypatch.setattr(default_client, "connect", lambda: True)
+    monkeypatch.setattr(default_client, "send_prompt", mock_send)
+    monkeypatch.setattr(core_monitor, "verify_message_submitted", lambda *a, **k: (False, None))
+    mock_gui = MagicMock()
+    monkeypatch.setattr("win32gui.FindWindow", mock_gui)
+
+    ok, msg = core_monitor.send_prompt_to_opencode_session("Test Session", "tiếp tục", session_id="ses_abc")
+    assert ok is True
+    assert "REST API" in msg
+    mock_gui.assert_not_called()
 
 def test_core_monitor_approve_prefers_rest(monkeypatch):
     from opencode_client import default_client
@@ -106,7 +121,7 @@ def test_api_server_send_endpoint(monkeypatch):
     ])
     monkeypatch.setattr(default_client, "connect", lambda: True)
     monkeypatch.setattr(default_client, "send_prompt", lambda s_id, prompt_text, image_path: (True, "Sent"))
-    monkeypatch.setattr(core_monitor, "verify_message_submitted", lambda sid, b_id, timeout_sec: (True, "msg_new"))
+    monkeypatch.setattr(core_monitor, "verify_message_submitted", lambda *a, **k: (True, "msg_new"))
 
     client = TestClient(app)
     resp = client.post("/api/send", json={"session": "Test Tab", "prompt": "chay tiep"})

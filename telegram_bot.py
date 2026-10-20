@@ -49,6 +49,9 @@ class OpenCodeTelegramBot:
         # Các phiên đang trong quá trình thực thi gửi tự động tiếp tục (tránh chạy trùng lặp)
         self.auto_continue_in_progress: set = set()
 
+        # Các phiên đang trong quá trình gửi lệnh thủ công / prompt (tránh gửi trùng khi bấm liên tiếp)
+        self.prompt_send_in_progress: set = set()
+
         # User targeted chat session mode
         self.user_chat_target: Dict[str, Dict[str, Any]] = {}
 
@@ -549,6 +552,12 @@ class OpenCodeTelegramBot:
             self.send_message(chat_id, text, markup)
 
     def deliver_content_to_session(self, chat_id: str, session_title: str, prompt_text: str = "", image_path: str = None, session_id: str = None):
+        if session_id:
+            if session_id in self.prompt_send_in_progress or session_id in self.auto_continue_in_progress:
+                self.send_message(chat_id, f"⏳ Đang có lệnh được gửi vào phiên <b>{session_title}</b>, vui lòng đợi hoàn thành!")
+                return
+            self.prompt_send_in_progress.add(session_id)
+
         content_desc = "hình ảnh kèm văn bản" if (image_path and prompt_text) else ("hình ảnh" if image_path else f"lệnh '{prompt_text}'")
         ack_res = self.send_message(chat_id, f"⏳ <b>Đang gửi {content_desc} vào OpenCode...</b>\n📌 Phiên: <b>{session_title}</b>")
         ack_msg_id = ack_res.get("result", {}).get("message_id") if ack_res else None
@@ -580,6 +589,9 @@ class OpenCodeTelegramBot:
                 log_msg(f"[Deliver] Exception vào {session_title}: {e}")
                 print(f"[TelegramBot] deliver_content_to_session error: {e}")
                 self.send_message(chat_id, f"❌ <b>Lỗi khi gửi lệnh</b> vào phiên <b>{session_title}</b>:\n<i>{e}</i>")
+            finally:
+                if session_id:
+                    self.prompt_send_in_progress.discard(session_id)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -637,7 +649,10 @@ class OpenCodeTelegramBot:
 
     def handle_send_prompt_action(self, chat_id: str, session_id: str):
         title = self.get_title_for_session(session_id)
-        
+        if session_id in self.prompt_send_in_progress or session_id in self.auto_continue_in_progress:
+            self.send_message(chat_id, f"⏳ Phiên <b>{title}</b> đang trong quá trình gửi lệnh, vui lòng không bấm liên tục!")
+            return
+
         cfg = self.config_getter()
         prompt_text = cfg.get("auto_continue_prompt", "tiếp tục")
         # Gửi thủ công -> reset bộ đếm tự động tiếp tục của phiên
@@ -1094,7 +1109,7 @@ class OpenCodeTelegramBot:
         if not self.is_enabled():
             return False
 
-        if sid in self.auto_continue_in_progress:
+        if sid in self.auto_continue_in_progress or sid in self.prompt_send_in_progress:
             log_msg(f"[AutoContinue] Bỏ qua {title} ({sid}): đang có luồng gửi chạy.")
             return False
 
