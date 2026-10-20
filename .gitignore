@@ -1,0 +1,38 @@
+# Local AI Agent Workspace
+.antigravity/
+
+# Secrets & Configuration
+config.json
+
+# Logs & Runtime State
+*.log
+monitor.log
+*.tmp
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS artifacts
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/

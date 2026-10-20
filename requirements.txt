@@ -1,0 +1,8 @@
+PySide6>=6.6.0
+pywin32>=306
+psutil>=5.9.0
+requests>=2.31.0
+Pillow>=10.0.0
+pywinauto>=0.6.8
+pyperclip>=1.8.2
+pytest>=8.0.0
