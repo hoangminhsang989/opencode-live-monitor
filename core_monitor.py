@@ -32,6 +32,16 @@ WINDOW_DIR = os.path.join(APPDATA, 'ai.opencode.desktop').replace('\\', '/')
 
 def is_opencode_permission_prompt_showing() -> bool:
     """Kiểm tra xem OpenCode có đang hiển thị hộp thoại xin cấp quyền (Cho phép một lần/Cho phép luôn) hay không."""
+    # 0. Ưu tiên kiểm tra qua REST API (ngầm 100%, không cần mở cửa sổ)
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            perms = default_client.get_pending_permissions()
+            if perms:
+                return True
+    except Exception:
+        pass
+
     try:
         hwnd = win32gui.FindWindow(None, "OpenCode")
         if not hwnd or not win32gui.IsWindowVisible(hwnd):
@@ -463,21 +473,36 @@ def verify_message_submitted(session_id: str, before_msg_id: Optional[str], time
 
 def send_prompt_to_opencode_session(session_title: str, prompt_text: str = "", image_path: str = None, session_id: str = None) -> tuple:
     """Gửi câu lệnh hoặc đính kèm ảnh vào phiên OpenCode với cơ chế xác minh 2 chiều qua database."""
+    # Tự động phân giải session_id nếu chưa được truyền vào
+    if not session_id and session_title:
+        try:
+            for s in poll_all_sessions():
+                s_t = s.get('title', '')
+                if s_t and (session_title.lower() in s_t.lower() or s_t.lower() in session_title.lower()):
+                    session_id = s.get('sessionId')
+                    break
+        except Exception:
+            pass
+
+    # 1. ƯU TIÊN GỬI QUA REST API TRỰC TIẾP (HOÀN TOÀN NGẦM, KHÔNG CHẠM VÀO MÀN HÌNH/CHUỘT/PHÍM)
+    if session_id:
+        try:
+            from opencode_client import default_client
+            if default_client.connect():
+                before_msg_id = get_latest_message_id(session_id)
+                api_ok, api_msg = default_client.send_prompt(session_id, prompt_text=prompt_text, image_path=image_path)
+                if api_ok:
+                    submitted, _ = verify_message_submitted(session_id, before_msg_id, timeout_sec=2.5)
+                    if submitted:
+                        return True, "Gửi thành công qua REST API (hoàn toàn ngầm)."
+                    print("[send_prompt_to_opencode_session] REST API gửi được nhưng chưa xác nhận SQLite, fallback GUI...")
+        except Exception as e:
+            print(f"[send_prompt_to_opencode_session] REST API error: {e}")
+
     with _ui_action_lock:
         hwnd = win32gui.FindWindow(None, "OpenCode")
         if not hwnd:
             return False, "Không tìm thấy cửa sổ OpenCode đang chạy."
-
-        # Tự động phân giải session_id nếu chưa được truyền vào
-        if not session_id and session_title:
-            try:
-                for s in poll_all_sessions():
-                    s_t = s.get('title', '')
-                    if s_t and (session_title.lower() in s_t.lower() or s_t.lower() in session_title.lower()):
-                        session_id = s.get('sessionId')
-                        break
-            except Exception:
-                pass
 
         before_msg_id = get_latest_message_id(session_id) if session_id else None
         prev_hwnd = win32gui.GetForegroundWindow()
@@ -646,8 +671,35 @@ def get_active_question_for_session(session_id: str) -> Optional[dict]:
     finally:
         conn.close()
 
-def approve_permission_in_opencode(session_title: str, action: str = "once") -> tuple:
+def approve_permission_in_opencode(session_title: str, action: str = "once", session_id: str = None) -> tuple:
     """Tự động phê duyệt quyền hoàn toàn ngầm không di chuyển chuột và không chiếm màn hình."""
+    # 0. Ưu tiên qua REST API
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            perms = default_client.get_pending_permissions()
+            if perms:
+                target_req = perms[0]
+                target_sid = session_id
+                if not target_sid and session_title:
+                    for s in poll_all_sessions():
+                        s_t = s.get('title', '')
+                        if s_t and (session_title.lower() in s_t.lower() or s_t.lower() in session_title.lower()):
+                            target_sid = s.get('sessionId')
+                            break
+                if target_sid:
+                    for p in perms:
+                        if p.get('sessionID') == target_sid:
+                            target_req = p
+                            break
+
+                reply_val = "once" if action == "once" else ("always" if action == "always" else "reject")
+                ok, msg = default_client.reply_permission(target_req['id'], reply=reply_val)
+                if ok:
+                    return True, f"Đã phản hồi quyền ({action}) thành công qua REST API."
+    except Exception as e:
+        print(f"[approve_permission_in_opencode] REST API error: {e}")
+
     with _ui_action_lock:
         hwnd = win32gui.FindWindow(None, "OpenCode")
         if not hwnd:
@@ -708,8 +760,34 @@ def approve_permission_in_opencode(session_title: str, action: str = "once") -> 
         except Exception as e:
             return False, str(e)
 
-def select_question_option_in_opencode(session_title: str, option_labels: list) -> tuple:
+def select_question_option_in_opencode(session_title: str, option_labels: list, session_id: str = None) -> tuple:
     """Tự động tích/chọn đáp án của câu hỏi hoàn toàn ngầm không di chuyển chuột."""
+    # 0. Ưu tiên qua REST API
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            questions = default_client.get_pending_questions()
+            if questions:
+                target_q = questions[0]
+                target_sid = session_id
+                if not target_sid and session_title:
+                    for s in poll_all_sessions():
+                        s_t = s.get('title', '')
+                        if s_t and (session_title.lower() in s_t.lower() or s_t.lower() in session_title.lower()):
+                            target_sid = s.get('sessionId')
+                            break
+                if target_sid:
+                    for q in questions:
+                        if q.get('sessionID') == target_sid:
+                            target_q = q
+                            break
+
+                ok, msg = default_client.reply_question(target_q['id'], [option_labels])
+                if ok:
+                    return True, "Đã gửi câu trả lời thành công qua REST API."
+    except Exception as e:
+        print(f"[select_question_option_in_opencode] REST API error: {e}")
+
     with _ui_action_lock:
         hwnd = win32gui.FindWindow(None, "OpenCode")
         if not hwnd:
@@ -792,8 +870,34 @@ def select_question_option_in_opencode(session_title: str, option_labels: list) 
         except Exception as e:
             return False, str(e)
 
-def dismiss_question_in_opencode(session_title: str) -> tuple:
+def dismiss_question_in_opencode(session_title: str, session_id: str = None) -> tuple:
     """Bấm nút 'Bỏ qua' hoặc gửi phím Escape trong OpenCode để bỏ qua câu hỏi."""
+    # 0. Ưu tiên qua REST API
+    try:
+        from opencode_client import default_client
+        if default_client.connect():
+            questions = default_client.get_pending_questions()
+            if questions:
+                target_q = questions[0]
+                target_sid = session_id
+                if not target_sid and session_title:
+                    for s in poll_all_sessions():
+                        s_t = s.get('title', '')
+                        if s_t and (session_title.lower() in s_t.lower() or s_t.lower() in session_title.lower()):
+                            target_sid = s.get('sessionId')
+                            break
+                if target_sid:
+                    for q in questions:
+                        if q.get('sessionID') == target_sid:
+                            target_q = q
+                            break
+
+                ok, msg = default_client.reject_question(target_q['id'])
+                if ok:
+                    return True, "Đã bỏ qua câu hỏi thành công qua REST API."
+    except Exception as e:
+        print(f"[dismiss_question_in_opencode] REST API error: {e}")
+
     with _ui_action_lock:
         hwnd = win32gui.FindWindow(None, "OpenCode")
         if not hwnd:

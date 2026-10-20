@@ -943,7 +943,7 @@ class OpenCodeTelegramBot:
                 ack_id = ack.get("result", {}).get("message_id") if ack else None
                 
                 def _perm_worker():
-                    ok, err = approve_permission_in_opencode(title, action=action)
+                    ok, err = approve_permission_in_opencode(title, action=action, session_id=sid)
                     if ack_id:
                         try:
                             self.api_request("deleteMessage", {"chat_id": chat_id, "message_id": ack_id})
@@ -981,7 +981,7 @@ class OpenCodeTelegramBot:
                 ack_id = ack.get("result", {}).get("message_id") if ack else None
 
                 def _radio_worker():
-                    ok, err = select_question_option_in_opencode(title, [selected_label])
+                    ok, err = select_question_option_in_opencode(title, [selected_label], session_id=sid)
                     if ack_id:
                         try:
                             self.api_request("deleteMessage", {"chat_id": chat_id, "message_id": ack_id})
@@ -1054,7 +1054,7 @@ class OpenCodeTelegramBot:
                     ack_id = ack.get("result", {}).get("message_id") if ack else None
 
                     def _cb_submit_worker():
-                        ok, err = select_question_option_in_opencode(title, selected_labels)
+                        ok, err = select_question_option_in_opencode(title, selected_labels, session_id=sid)
                         if ack_id:
                             try:
                                 self.api_request("deleteMessage", {"chat_id": chat_id, "message_id": ack_id})
@@ -1074,7 +1074,7 @@ class OpenCodeTelegramBot:
                 ack_id = ack.get("result", {}).get("message_id") if ack else None
 
                 def _dismiss_worker():
-                    ok, err = dismiss_question_in_opencode(title)
+                    ok, err = dismiss_question_in_opencode(title, session_id=sid)
                     if ack_id:
                         try:
                             self.api_request("deleteMessage", {"chat_id": chat_id, "message_id": ack_id})

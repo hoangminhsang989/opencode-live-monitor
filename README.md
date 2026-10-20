@@ -28,7 +28,19 @@ Phần mềm giám sát giao diện nổi (Floating HUD) và bộ điều khiể
   - Tùy chỉnh bật/tắt riêng cho từng phiên hoặc toàn bộ.
   - Giới hạn số lần tự động gửi (1 - 99 lần).
   - **Xác minh đóng (Closed-Loop SQLite Verification):** Tự động kiểm tra vào hàng đợi SQLite của OpenCode trước khi xác nhận lượt gửi thành công, hoàn trả lượt nếu thất bại.
-- **Thao tác hoàn toàn chạy ngầm:** Gửi tin nhắn, gõ lệnh hoặc phê duyệt vào cửa sổ OpenCode bằng UI Automation, không chiếm chuột, không cướp tiêu điểm bàn phím.
+- **Thao tác hoàn toàn chạy ngầm:** Ưu tiên 100% qua REST API ngầm trong bộ nhớ, không chiếm chuột, không cướp tiêu điểm bàn phím, không ghi đè Clipboard.
+
+### 3. Điều khiển không chạm qua REST API & CLI (Zero UI Touch)
+- **Tự động kết nối OpenCode Sidecar REST API:** Trích xuất token xác thực và cổng TCP trực tiếp từ bộ nhớ tiến trình NodeService qua Win32 API (`NtQueryInformationProcess`).
+- **100% Vô hình & Không cướp chuột/phím:** Gửi prompt, cấp quyền, trả lời trắc nghiệm trực tiếp qua HTTP REST ngầm. Cửa sổ OpenCode không bị kéo lên màn hình, hoạt động ngay cả khi **máy tính đang khóa màn hình (Lock Screen)** hoặc điều khiển từ xa qua **SSH**.
+- **Bộ công cụ dòng lệnh (`cli.py`):**
+  - `python cli.py status` — Xem bảng trạng thái các phiên kèm tool đang chạy.
+  - `python cli.py watch` — Dashboard TUI trực tiếp tự làm mới mỗi 1.5s.
+  - `python cli.py send <session> <prompt>` — Gửi lệnh vào phiên chỉ định.
+  - `python cli.py approve [once|always|reject]` — Cấp quyền chạy lệnh/sửa file.
+  - `python cli.py question` & `python cli.py answer <1,2>` — Xem và trả lời câu hỏi.
+  - `python cli.py abort <session>` — Dừng phiên đang chạy.
+- **REST API Gateway độc lập (`api_server.py`):** Máy chủ FastAPI (cổng 7080) cung cấp REST API mở cho các ứng dụng ngoài, curl từ máy khác, bash script, webhooks.
 
 ---
 
@@ -81,6 +93,9 @@ pip install -r requirements.txt
 opencode-live-monitor/
 ├── app.py                     # Giao diện chính PySide6 (HUD floating window)
 ├── core_monitor.py            # Quét & phân tích phiên OpenCode từ SQLite nội bộ
+├── opencode_client.py         # Kết nối Sidecar REST API qua bộ nhớ
+├── cli.py                     # Công cụ dòng lệnh CLI điều khiển & TUI live watch
+├── api_server.py              # REST API Gateway độc lập (FastAPI cổng 7080)
 ├── telegram_bot.py            # Xử lý tương tác 2 chiều với Telegram Bot API
 ├── telegram_notifier.py       # Module phụ trợ gửi thông báo Telegram
 ├── start_monitor.vbs          # Script khởi chạy ngầm chống mở trùng lặp
@@ -89,7 +104,8 @@ opencode-live-monitor/
 ├── config.example.json        # Mẫu tệp cấu hình
 ├── requirements.txt           # Danh sách thư viện Python phụ thuộc
 └── tests/
-    └── test_telegram_bot.py   # Bộ kiểm thử tự động (PyTest)
+    ├── test_telegram_bot.py   # Bộ kiểm thử Telegram Bot (PyTest)
+    └── test_opencode_api.py   # Bộ kiểm thử REST API & CLI (PyTest)
 ```
 
 ---
